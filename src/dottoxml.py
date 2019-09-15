@@ -1,4 +1,4 @@
-# coding: latin-1
+# coding: utf-8
 # Copyright (c) 2009,2010,2011,2012,2013,2014 Dirk Baechle.
 # www: https://bitbucket.org/dirkbaechle/dottoxml
 # mail: dl9obn AT darc.de
@@ -26,6 +26,9 @@ import locale
 import optparse
 
 import dot
+import pydot
+import types
+import re
 
 # Usage message
 usgmsg = "Usage: dottoxml.py [options] infile.dot outfile.graphml"
@@ -34,6 +37,13 @@ def usage():
     print "dottoxml 1.6, 2014-04-10, Dirk Baechle\n"
     print usgmsg
     print "Hint: Try '-h' or '--help' for further infos!"
+
+def dequote(label):
+    m = dot.r_quoted.match(label)
+    if m:
+        return m.group(1)
+    else:
+        return label
 
 def exportDot(o, nodes, edges, options):
     o.write("graph [\n")
@@ -127,6 +137,34 @@ def exportGDF(o, nodes, edges, options):
         el.exportGDF(o,nodes,options)
     o.write("edgedef> node1,node2\n")
 
+def render(g, nodes, edges, default_node, default_edge):
+    for s in g.get_subgraph_list():
+        #print 'subgraph default %s' % s.get_attributes()
+        render(s, nodes, edges, default_node, default_edge)
+
+    for n in g.get_node_list():
+	name = dequote(n.get_name())
+	if name == 'node':
+	    # default node
+	    n0 = dot.Node()
+	    for k, v in n.get_attributes().iteritems():
+		n0.attribs[k] = v
+	    default_node = n0
+	elif name == 'edge':
+	    # default node
+	    print 'edge default %s' % n.get_attributes()
+	else:
+	    # Process node
+	    n = dot.Node(name)
+	    if default_node:
+		n.complementAttributes(default_node)
+	    nodes[n.label] = n
+    for e in g.get_edge_list():
+        e0 = dot.Edge(dot.Node.find(dequote(e.get_source())), dot.Node.find(dequote(e.get_destination())))
+        if default_edge:
+            e0.complementAttributes(default_edge)
+        edges.append(e0)
+    
 def main():
     parser = optparse.OptionParser(usage=usgmsg)
     parser.add_option('-f', '--format',
@@ -222,83 +260,26 @@ def main():
     edges = []
     default_edge = None
     default_node = None
-    nid = 1
-    eid = 1
+
     f = open(infile, 'r')
-    content = f.read().splitlines()
+    content = f.read()
     f.close()
 
-    idx = 0
-    while idx < len(content):
-        l = unicode(content[idx], options.InputEncoding)
-        if '->' in l:
-            # Check for multiline edge
-            if '[' in l and ']' not in l:
-                ml = ""
-                while ']' not in ml:
-                    idx += 1
-                    ml = unicode(content[idx], options.InputEncoding)
-                    l = ' '.join([l.rstrip(), ml.lstrip()])
-            # Process edge
-            e = dot.Edge()
-            e.initFromString(l)
-            e.id = eid
-            eid += 1
-            if default_edge:
-                e.complementAttributes(default_edge)
-            edges.append(e)
-        elif '[' in l:
-            # Check for multiline node
-            if ']' not in l:
-                ml = ""
-                while ']' not in ml:
-                    idx += 1
-                    ml = unicode(content[idx], options.InputEncoding)
-                    l = ' '.join([l.rstrip(), ml.lstrip()])
-            # Process node
-            n = dot.Node()
-            n.initFromString(l)
-            lowlabel = n.label.lower()
-            if (lowlabel != 'graph' and
-                lowlabel != 'edge' and
-                lowlabel != 'node'):
-                n.id = nid
-                nid += 1
-                if default_node:
-                    n.complementAttributes(default_node)
-                nodes[n.label] = n
-            else:
-                if lowlabel == 'edge':
-                    default_edge = n
-                elif lowlabel == 'node':
-                    default_node = n   
-        elif 'charset=' in l:
-            # Pick up input encoding from DOT file
-            li = l.strip().split('=')
-            if len(li) == 2:
-                ienc = li[1].strip('"')
-                if ienc != "":
-                    options.InputEncoding = ienc
-                    if options.verbose:
-                        print "Info: Picked up input encoding '%s' from the DOT file." % ienc
-        idx += 1
+    g = pydot.dot_parser.parse_dot_data(content)
+    render(g, nodes, edges, default_node, default_edge)
 
     # Add single nodes, if required
     for e in edges:
-        if not nodes.has_key(e.src):
+        if not nodes.has_key(e.src.label):
             n = dot.Node()
-            n.label = e.src
-            n.id = nid
-            nid += 1
-            nodes[e.src] = n
-        if not nodes.has_key(e.dest):
+            n.label = e.src.label
+            nodes[e.src.label] = n
+        if not nodes.has_key(e.dest.label):
             n = dot.Node()
-            n.label = e.dest
-            n.id = nid
-            nid += 1
-            nodes[e.dest] = n
-        nodes[e.src].referenced = True
-        nodes[e.dest].referenced = True
+            n.label = e.dest.label
+            nodes[e.dest.label] = n
+        nodes[e.src.label].referenced = True
+        nodes[e.dest.label].referenced = True
 
     if options.verbose:
         print "\nNodes: %d " % len(nodes)
